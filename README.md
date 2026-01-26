@@ -141,7 +141,7 @@ Detailed results are saved in `results/grid_search_results.csv` after training
 A user-friendly web calculator is available for clinical implementation of the recalibrated SOFA score.
 
 ### Access the Calculator
-**Live Demo**: https://juan-duenas-r.github.io/sofa-score-optimization/index.html
+**Live Demo**: https://juan-duenas-r.github.io/sofa-score-optimization/
 ### Features
 - **Real-time calculation** of the recalibrated SOFA score
 - **Mortality probability estimation** using the validated logistic regression model
@@ -181,6 +181,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Email**: juan.duenas@uva.es
 - **Institution**: Universidad de Valladolid
 
-[![Web Calculator](https://img.shields.io/badge/Web-Calculator-blue?style=for-the-badge&logo=html5)](-)
+[![Web Calculator](https://img.shields.io/badge/Web-Calculator-blue?style=for-the-badge&logo=html5)](https://juan-duenas-r.github.io/sofa-score-optimization/)
 [![DOI](https://img.shields.io/badge/DOI-pending-orange?style=for-the-badge)](-)
+
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
