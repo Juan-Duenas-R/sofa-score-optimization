@@ -1,0 +1,57 @@
+# Hyperparameter configuration
+random_seed: 42
+min_method: "L-BFGS-B"
+test_size: 0.2
+val_size: 0.25
+
+# Grid search parameters
+grid_search:
+  min_samples_leaf_list:
+    - 15
+  w_bound_list:
+    - 100
+  reg_lambda_list:
+    - 0.01
+    - 0.1
+    - 1
+    - 10
+    - 100
+    - 1000
+
+# Auto bin selection parameters
+auto_bin:
+  kmax: 10
+  min_samples_leaf: 15
+  smoothing: 1.0e-2
+  penalty_coef: 4.05e-4
+
+single_config:
+  bin_penalty_alpha : 1.0
+  eps_counts : 1.0e-6
+
+# Feature names
+feature_names:
+  - PaFi
+  - GCS
+  - meanbp
+  - platelets
+  - creatinine
+  - bilirubin
+  - norepinephrine
+  - epinephrine
+  - dopamine
+  - dobutamine
+target: mortality
+stratify_col: mortality
+
+optimization:
+  integer_local_search: true
+  integer_ls_max_passes: 15
+  integer_ls_max_no_improve: 10
+  integer_ls_step: 1
+  enforce_positive_lr_coef: true
+
+scaling:
+  target_score_std: 10.0
+  scale_penalty_coef: 5.0
+  eps_std: 1.0e-12

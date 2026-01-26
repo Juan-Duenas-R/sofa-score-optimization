@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Recalibrated SOFA Score Calculator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 0.95em;
+            opacity: 0.9;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .input-group {
+            margin-bottom: 25px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            border-left: 4px solid #667eea;
+        }
+
+        .input-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+            font-size: 0.95em;
+        }
+
+        .input-group input[type="number"],
+        .input-group select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 1em;
+            transition: all 0.3s;
+        }
+
+        .input-group input[type="number"]:focus,
+        .input-group select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .input-group small {
+            display: block;
+            margin-top: 5px;
+            color: #666;
+            font-size: 0.85em;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            margin-top: 10px;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            margin-right: 10px;
+            cursor: pointer;
+        }
+
+        .checkbox-group label {
+            margin: 0;
+            cursor: pointer;
+        }
+
+        .calculate-btn {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 1.1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            margin-top: 20px;
+        }
+
+        .calculate-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        .calculate-btn:active {
+            transform: translateY(0);
+        }
+
+        .results {
+            margin-top: 30px;
+            padding: 25px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            display: none;
+        }
+
+        .results.show {
+            display: block;
+            animation: slideIn 0.4s ease;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .result-card {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 15px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .result-card h3 {
+            margin-bottom: 10px;
+            color: #333;
+            font-size: 1.2em;
+        }
+
+        .score-display {
+            font-size: 3em;
+            font-weight: bold;
+            text-align: center;
+            margin: 15px 0;
+        }
+
+        .probability-display {
+            font-size: 2.5em;
+            font-weight: bold;
+            text-align: center;
+            margin: 15px 0;
+            padding: 20px;
+            border-radius: 10px;
+        }
+
+        .risk-low {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .risk-moderate {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .risk-high {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .risk-very-high {
+            background: #dc3545;
+            color: white;
+        }
+
+        .risk-label {
+            text-align: center;
+            font-size: 1.2em;
+            font-weight: 600;
+            margin-top: 10px;
+        }
+
+        .footer {
+            background: #f8f9fa;
+            padding: 20px;
+            text-align: center;
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        .footer a {
+            color: #667eea;
+            text-decoration: none;
+        }
+
+        .footer a:hover {
+            text-decoration: underline;
+        }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 1.5em;
+            }
+            
+            .content {
+                padding: 20px;
+            }
+
+            .score-display {
+                font-size: 2em;
+            }
+
+            .probability-display {
+                font-size: 2em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1> Recalibrated SOFA Score Calculator</h1>
+            <p>Data-Driven Machine Learning Recalibration</p>
+        </div>
+
+        <div class="content">
+            <form id="sofaForm">
+                <!-- PaO2/FiO2 -->
+                <div class="input-group">
+                    <label for="pao2fio2">PaO₂/FiO₂ Ratio</label>
+                    <input type="number" id="pao2fio2" step="0.1" min="0" placeholder="e.g., 250">
+                    <small>Partial pressure of arterial Oxygen / Fraction of Inspired Oxygen ratio</small>
+                </div>
+
+                <!-- Glasgow Coma Scale -->
+                <div class="input-group">
+                    <label for="gcs">Glasgow Coma Scale (GCS)</label>
+                    <input type="number" id="gcs" min="3" max="15" step="1" placeholder="e.g., 15">
+                    <small>Score from 3 (worst) to 15 (best)</small>
+                </div>
+
+                <!-- Mean Blood Pressure -->
+                <div class="input-group">
+                    <label for="mbp">Mean Blood Pressure (mmHg)</label>
+                    <input type="number" id="mbp" step="0.1" min="0" placeholder="e.g., 70">
+                    <small>Mean arterial pressure</small>
+                </div>
+
+                <!-- Platelets -->
+                <div class="input-group">
+                    <label for="platelets">Platelets (×10³/µL)</label>
+                    <input type="number" id="platelets" step="1" min="0" placeholder="e.g., 200">
+                    <small>Platelet count in thousands per microliter</small>
+                </div>
+
+                <!-- Creatinine -->
+                <div class="input-group">
+                    <label for="creatinine">Creatinine (mg/dL)</label>
+                    <input type="number" id="creatinine" step="0.01" min="0" placeholder="e.g., 1.2">
+                    <small>Serum creatinine level</small>
+                </div>
+
+                <!-- Bilirubin -->
+                <div class="input-group">
+                    <label for="bilirubin">Bilirubin (mg/dL)</label>
+                    <input type="number" id="bilirubin" step="0.01" min="0" placeholder="e.g., 0.8">
+                    <small>Total bilirubin level</small>
+                </div>
+
+                <!-- Vasopressors -->
+                <div class="input-group">
+                    <label>Vasopressor Support</label>
+                    
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="norepinephrine" name="vasopressor">
+                        <label for="norepinephrine">Norepinephrine</label>
+                    </div>
+                    
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="epinephrine" name="vasopressor">
+                        <label for="epinephrine">Epinephrine</label>
+                    </div>
+                    
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="dopamine" name="vasopressor">
+                        <label for="dopamine">Dopamine</label>
+                    </div>
+                    
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="dobutamine" name="vasopressor">
+                        <label for="dobutamine">Dobutamine</label>
+                    </div>
+                    
+                    <small>Select any vasopressors currently in use</small>
+                </div>
+
+                <button type="submit" class="calculate-btn">Calculate SOFA Score</button>
+            </form>
+
+            <div id="results" class="results">
+                <div class="result-card">
+                    <h3>Recalibrated SOFA Score</h3>
+                    <div id="scoreDisplay" class="score-display">-</div>
+                </div>
+
+                <div class="result-card">
+                    <h3>Mortality Probability</h3>
+                    <div id="probabilityDisplay" class="probability-display">-</div>
+                    <div id="riskLabel" class="risk-label">-</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <p><strong>Reference:</strong> Dueñas-Ruiz J, Martín-Rodríguez F, et al. Data-Driven Recalibration of the SOFA Score Using Interpretable Machine Learning: A Multicenter Development and Validation Study.</p>
+            <p style="margin-top: 10px;">
+                <a href="https://github.com/Juan-Duenas-R/sofa-score-optimization" target="_blank">
+                    📊 View Source Code on GitHub
+                </a>
+            </p>
+        </div>
+    </div>
+
+    <script>
+        // Model coefficients from the paper
+        const LOGISTIC_COEF = 1.23433243;
+        const LOGISTIC_INTERCEPT = -0.43112504;
+        
+        // Score scaler parameters
+        const SCALER_MEAN = -26.06213167;
+        const SCALER_SCALE = 9.99970595;
+
+        // Thresholds and weights from Table 2
+        const THRESHOLDS_WEIGHTS = {
+            pao2fio2: {
+                thresholds: [66.6333313, 101.4017868, 180.5277786],
+                weights: [6, 1, -3, -6]
+            },
+            gcs: {
+                thresholds: [4.5, 7.5, 8.5],
+                weights: [5, -1, -5, -6]
+            },
+            mbp: {
+                thresholds: [40.5, 43.5, 47.5, 51.5, 139.5, 151.5],
+                weights: [5, 0, -1, -5, -6, -2, -1]
+            },
+            platelets: {
+                thresholds: [36.5, 83.5, 127.5, 228.5],
+                weights: [3, -1, -3, -4, -1]
+            },
+            creatinine: {
+                thresholds: [1.08500004, 1.66499996, 5.13499999],
+                weights: [-5, -2, 2, -2]
+            },
+            bilirubin: {
+                thresholds: [0.60500002, 1.245, 2.46000004],
+                weights: [-4, -2, -1, 2]
+            },
+            norepinephrine: {
+                thresholds: [0.5],
+                weights: [-4, 1]
+            },
+            epinephrine: {
+                thresholds: [0.5],
+                weights: [-4, 2]
+            },
+            dopamine: {
+                thresholds: [0.5],
+                weights: [-2, 0]
+            },
+            dobutamine: {
+                thresholds: [0.5],
+                weights: [0, -2]
+            }
+        };
+
+        function getWeight(value, thresholds, weights) {
+            // Find the appropriate bin based on thresholds
+            let binIndex = 0;
+            for (let i = 0; i < thresholds.length; i++) {
+                if (value >= thresholds[i]) {
+                    binIndex = i + 1;
+                }
+            }
+            return weights[binIndex];
+        }
+
+        function calculateSOFAScore(data) {
+            let score = 0;
+
+            // PaO2/FiO2
+            if (data.pao2fio2 !== null && data.pao2fio2 !== '') {
+                score += getWeight(
+                    parseFloat(data.pao2fio2),
+                    THRESHOLDS_WEIGHTS.pao2fio2.thresholds,
+                    THRESHOLDS_WEIGHTS.pao2fio2.weights
+                );
+            }
+
+            // GCS
+            if (data.gcs !== null && data.gcs !== '') {
+                score += getWeight(
+                    parseFloat(data.gcs),
+                    THRESHOLDS_WEIGHTS.gcs.thresholds,
+                    THRESHOLDS_WEIGHTS.gcs.weights
+                );
+            }
+
+            // Mean Blood Pressure
+            if (data.mbp !== null && data.mbp !== '') {
+                score += getWeight(
+                    parseFloat(data.mbp),
+                    THRESHOLDS_WEIGHTS.mbp.thresholds,
+                    THRESHOLDS_WEIGHTS.mbp.weights
+                );
+            }
+
+            // Platelets
+            if (data.platelets !== null && data.platelets !== '') {
+                score += getWeight(
+                    parseFloat(data.platelets),
+                    THRESHOLDS_WEIGHTS.platelets.thresholds,
+                    THRESHOLDS_WEIGHTS.platelets.weights
+                );
+            }
+
+            // Creatinine
+            if (data.creatinine !== null && data.creatinine !== '') {
+                score += getWeight(
+                    parseFloat(data.creatinine),
+                    THRESHOLDS_WEIGHTS.creatinine.thresholds,
+                    THRESHOLDS_WEIGHTS.creatinine.weights
+                );
+            }
+
+            // Bilirubin
+            if (data.bilirubin !== null && data.bilirubin !== '') {
+                score += getWeight(
+                    parseFloat(data.bilirubin),
+                    THRESHOLDS_WEIGHTS.bilirubin.thresholds,
+                    THRESHOLDS_WEIGHTS.bilirubin.weights
+                );
+            }
+
+            // Vasopressors (binary: 0 or 1)
+            score += getWeight(
+                data.norepinephrine ? 1 : 0,
+                THRESHOLDS_WEIGHTS.norepinephrine.thresholds,
+                THRESHOLDS_WEIGHTS.norepinephrine.weights
+            );
+
+            score += getWeight(
+                data.epinephrine ? 1 : 0,
+                THRESHOLDS_WEIGHTS.epinephrine.thresholds,
+                THRESHOLDS_WEIGHTS.epinephrine.weights
+            );
+
+            score += getWeight(
+                data.dopamine ? 1 : 0,
+                THRESHOLDS_WEIGHTS.dopamine.thresholds,
+                THRESHOLDS_WEIGHTS.dopamine.weights
+            );
+
+            score += getWeight(
+                data.dobutamine ? 1 : 0,
+                THRESHOLDS_WEIGHTS.dobutamine.thresholds,
+                THRESHOLDS_WEIGHTS.dobutamine.weights
+            );
+
+            return score;
+        }
+
+        function calculateProbability(score) {
+            // Apply StandardScaler: scaled_score = (score - mean) / scale
+            const scaledScore = (score - SCALER_MEAN) / SCALER_SCALE;
+            
+            // Logistic regression: P = 1 / (1 + exp(-(intercept + coef * scaled_score)))
+            const logit = LOGISTIC_INTERCEPT + LOGISTIC_COEF * scaledScore;
+            const probability = 1 / (1 + Math.exp(-logit));
+            return probability;
+        }
+
+        function getRiskCategory(probability) {
+            if (probability < 0.20) {
+                return { class: 'risk-low', label: 'Low Risk' };
+            } else if (probability < 0.40) {
+                return { class: 'risk-moderate', label: 'Moderate Risk' };
+            } else if (probability < 0.60) {
+                return { class: 'risk-high', label: 'High Risk' };
+            } else {
+                return { class: 'risk-very-high', label: 'Very High Risk' };
+            }
+        }
+
+        document.getElementById('sofaForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+
+            // Collect form data
+            const data = {
+                pao2fio2: document.getElementById('pao2fio2').value,
+                gcs: document.getElementById('gcs').value,
+                mbp: document.getElementById('mbp').value,
+                platelets: document.getElementById('platelets').value,
+                creatinine: document.getElementById('creatinine').value,
+                bilirubin: document.getElementById('bilirubin').value,
+                norepinephrine: document.getElementById('norepinephrine').checked,
+                epinephrine: document.getElementById('epinephrine').checked,
+                dopamine: document.getElementById('dopamine').checked,
+                dobutamine: document.getElementById('dobutamine').checked
+            };
+
+            // Calculate score and probability
+            const score = calculateSOFAScore(data);
+            const probability = calculateProbability(score);
+            const riskCategory = getRiskCategory(probability);
+
+            // Display results
+            document.getElementById('scoreDisplay').textContent = score;
+            document.getElementById('probabilityDisplay').textContent = 
+                (probability * 100).toFixed(1) + '%';
+            
+            const probabilityDisplay = document.getElementById('probabilityDisplay');
+            probabilityDisplay.className = 'probability-display ' + riskCategory.class;
+            
+            document.getElementById('riskLabel').textContent = riskCategory.label;
+
+            // Show results section
+            document.getElementById('results').classList.add('show');
+
+            // Scroll to results
+            document.getElementById('results').scrollIntoView({ 
+                behavior: 'smooth', 
+                block: 'nearest' 
+            });
+        });
+    </script>
+</body>
+</html>
