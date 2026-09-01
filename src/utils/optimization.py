@@ -11,6 +11,17 @@ from src.utils.scoring import (
     compute_score_from_thresholds_weights,
     initial_weights_from_bins,
 )
+from src.utils.constraints import (
+    build_param_spec,
+    theta_to_weights,
+    weights_to_theta,
+    theta_bounds,
+    round_weights_monotone,
+    is_feasible,
+    recenter_weights,
+    bin_counts_per_feature,
+    sparse_bin_penalty,
+)
 import yaml
 
 with open("config.yaml", "r") as f:
@@ -27,6 +38,21 @@ _ENFORCE_POSITIVE_LR_COEF = config["optimization"]["enforce_positive_lr_coef"]
 TARGET_SCORE_STD = config["scaling"]["target_score_std"]
 SCALE_PENALTY_COEF = config["scaling"]["scale_penalty_coef"]
 EPS_STD = float(config["scaling"]["eps_std"])
+
+# Monotonicity configuration
+_MONO_CFG = config.get("monotonicity", {}) or {}
+MONOTONICITY_ENABLED = bool(_MONO_CFG.get("enabled", False))
+MONOTONICITY_DIRECTIONS = _MONO_CFG.get("directions", {}) or {}
+RECENTER_WEIGHTS = bool(_MONO_CFG.get("recenter_weights", False))
+FEATURE_NAMES = config["feature_names"]
+BIN_PENALTY_MODE = config["single_config"].get("bin_penalty_mode", "legacy")
+
+
+def make_param_spec(k_bins_list):
+    """Build the constrained parameter layout for the configured features."""
+    return build_param_spec(
+        FEATURE_NAMES, k_bins_list, MONOTONICITY_DIRECTIONS
+    )
 
 
 def _clip_round_int(wvec, W_bound):
@@ -51,7 +77,8 @@ def _discrete_local_search(
         W_bound,
         max_passes=3,
         max_no_improve_passes=1,
-        step=1
+        step=1,
+        spec=None
 ):
     """Discrete local search in integer weight space.
 
@@ -64,6 +91,9 @@ def _discrete_local_search(
         max_passes (int): Maximum number of passes through all coordinates.
         max_no_improve_passes (int): Stop after this many non-improving passes.
         step (int): Step size for coordinate updates.
+        spec (ParamSpec or None): When given, candidate steps that would break
+            monotonicity are rejected. A single +/-1 perturbation can violate
+            the ordering, so feasibility must be re-checked on every candidate.
 
     Returns:
         np.ndarray: Optimized integer weights.
@@ -83,13 +113,19 @@ def _discrete_local_search(
             cand_plus = base.copy()
             cand_plus[i] = np.clip(cand_plus[i] + step, -W, W)
             cand_plus = _clip_round_int(cand_plus, W)
-            v_plus = float(obj_fn(cand_plus))
+            if spec is not None and not is_feasible(cand_plus, spec):
+                v_plus = np.inf
+            else:
+                v_plus = float(obj_fn(cand_plus))
 
             # Test negative step
             cand_minus = base.copy()
             cand_minus[i] = np.clip(cand_minus[i] - step, -W, W)
             cand_minus = _clip_round_int(cand_minus, W)
-            v_minus = float(obj_fn(cand_minus))
+            if spec is not None and not is_feasible(cand_minus, spec):
+                v_minus = np.inf
+            else:
+                v_minus = float(obj_fn(cand_minus))
 
             # Accept best improvement
             if v_plus + 1e-12 < best_val and v_plus <= v_minus:
@@ -120,7 +156,7 @@ def run_single_config(
         y_val,
         w_train,
         min_method,
-        bin_penalty_alpha=1.0,
+        bin_penalty_alpha,
         eps_counts=1e-6
 ):
     """Run optimization for a single hyperparameter configuration.
@@ -143,7 +179,10 @@ def run_single_config(
         y_val (np.ndarray): Validation target.
         w_train (np.ndarray): Training sample weights.
         min_method (str): Scipy optimization method.
-        bin_penalty_alpha (float): Penalty for sparse bins.
+        bin_penalty_alpha (float): Penalty for sparse bins. REQUIRED: the
+            caller must pass the value selected by the grid search. It has no
+            default on purpose, so that omitting it raises a TypeError rather
+            than silently applying an arbitrary value.
         eps_counts (float): Smoothing for bin counts.
 
     Returns:
@@ -214,23 +253,23 @@ def run_single_config(
         wlist = vector_to_weights_list(wvec)
         return compute_score_from_thresholds_weights(X, thresholds_list, wlist)
 
+    # Bin counts depend only on the data and the thresholds, never on the
+    # weights, so they are computed once instead of on every objective call.
+    counts_flat = bin_counts_per_feature(
+        X_train, thresholds_list, k_bins_list
+    )
+    # Bin layout, used to centre the penalty per feature. The directions are
+    # irrelevant here; only the per-feature slices matter.
+    spec_layout = make_param_spec(k_bins_list)
+
     # Objective function with scale penalty
     def obj_weights(wvec):
         """Objective: log-loss + bin penalty + scale penalty."""
         # Penalty for sparse bins
-        penalty_bins = 0.0
-        for j in range(n_features):
-            k_j = k_bins_list[j]
-            counts = np.bincount(
-                np.digitize(
-                    X_train[:, j],
-                    thresholds_list[j],
-                    right=False
-                ).astype(int),
-                minlength=k_j
-            )
-            penalty_bins += np.sum(1.0 / (counts + eps_counts))
-        penalty_bins *= bin_penalty_alpha
+        penalty_bins = sparse_bin_penalty(
+            wvec, counts_flat, bin_penalty_alpha, eps_counts,
+            mode=BIN_PENALTY_MODE, spec=spec_layout
+        )
 
         # Compute score
         s_train = compute_score_weights_vector(X_train, wvec).reshape(-1, 1)
@@ -272,23 +311,49 @@ def run_single_config(
         return float(train_logloss + penalty_bins + penalty_scale)
 
     # 1. Continuous optimization
-    bounds = [(-W_bound, W_bound)] * len(w0)
-    res = minimize(
-        obj_weights,
-        x0=w0,
-        method=min_method,
-        bounds=bounds,
-        options={"maxiter": 1000, "ftol": 1e-6}
-    )
-    w_opt_cont = res.x.copy()
+    if MONOTONICITY_ENABLED:
+        # Reparametrise in terms of non-negative increments so that L-BFGS-B,
+        # which supports box bounds only, can enforce monotonicity natively.
+        spec = spec_layout
+        theta0 = weights_to_theta(w0, spec, W_bound=W_bound)
+
+        def obj_theta(theta):
+            return obj_weights(theta_to_weights(theta, spec))
+
+        res = minimize(
+            obj_theta,
+            x0=theta0,
+            method=min_method,
+            bounds=theta_bounds(spec, W_bound),
+            options={"maxiter": 1000, "ftol": 1e-6}
+        )
+        w_opt_cont = theta_to_weights(res.x, spec)
+    else:
+        spec = None
+        bounds = [(-W_bound, W_bound)] * len(w0)
+        res = minimize(
+            obj_weights,
+            x0=w0,
+            method=min_method,
+            bounds=bounds,
+            options={"maxiter": 1000, "ftol": 1e-6}
+        )
+        w_opt_cont = res.x.copy()
 
     # 2. Scale and round to integers
+    # Scaling by a positive constant and rounding are both non-decreasing
+    # maps, so monotonicity survives this step. Accumulate first, round
+    # second: rounding the increments instead would let a run of small
+    # positive increments collapse to zero.
     s_cont = compute_score_weights_vector(X_train, w_opt_cont)
     std_cont = float(np.std(s_cont))
     scale = TARGET_SCORE_STD / max(std_cont, EPS_STD)
 
     w_scaled = w_opt_cont * scale
-    w_opt_int = _clip_round_int(w_scaled, W_bound)
+    if MONOTONICITY_ENABLED:
+        w_opt_int = round_weights_monotone(w_scaled, W_bound)
+    else:
+        w_opt_int = _clip_round_int(w_scaled, W_bound)
 
     # 3. Discrete local search
     if _INTEGER_LOCAL_SEARCH:
@@ -298,7 +363,8 @@ def run_single_config(
             W_bound=W_bound,
             max_passes=_INTEGER_LS_MAX_PASSES,
             max_no_improve_passes=_INTEGER_LS_MAX_NO_IMPROVE,
-            step=_INTEGER_LS_STEP
+            step=_INTEGER_LS_STEP,
+            spec=spec
         )
 
     # 4. Evaluate on validation set
@@ -341,10 +407,22 @@ def run_single_config(
 
     val_logloss, val_auc, lr_coef = eval_with_weights(w_opt_int)
 
-    # 5. Enforce positive coefficient
+    # 5. Enforce positive coefficient (behaviour unchanged)
     if _ENFORCE_POSITIVE_LR_COEF and lr_coef < 0:
+        if MONOTONICITY_ENABLED:
+            # With directional constraints the score is increasing in risk by
+            # construction, so this branch is not expected to trigger. If it
+            # does, negating the weights also reverses every monotonicity
+            # direction, so the resulting solution is flagged here.
+            print("  WARNING: negative LR coefficient under monotonicity "
+                  "constraints; sign flip reverses the imposed directions.")
         w_opt_int = -w_opt_int
         val_logloss, val_auc, lr_coef = eval_with_weights(w_opt_int)
+
+    # 6. Presentational recentring (pure reparametrisation, no effect on
+    #    predictions, AUROC or calibration).
+    if MONOTONICITY_ENABLED and RECENTER_WEIGHTS and spec is not None:
+        w_opt_int = recenter_weights(w_opt_int, spec)
 
     w_opt_list = vector_to_weights_list(w_opt_int)
 
@@ -360,6 +438,11 @@ def run_single_config(
         "lr_coef": float(lr_coef),
         "integer_weights": True,
         "lr_coef_positive_enforced": bool(_ENFORCE_POSITIVE_LR_COEF),
+        "monotonicity_enabled": bool(MONOTONICITY_ENABLED),
+        "monotonicity_ok": (
+            bool(is_feasible(w_opt_int, spec)) if spec is not None else None
+        ),
+        "bin_penalty_mode": str(BIN_PENALTY_MODE),
         "target_score_std": float(TARGET_SCORE_STD),
         "scale_penalty_coef": float(SCALE_PENALTY_COEF),
     }

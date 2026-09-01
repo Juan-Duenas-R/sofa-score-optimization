@@ -13,14 +13,13 @@ from sklearn.metrics import (
     classification_report,
     roc_curve,
 )
-
+import yaml
 from src.utils.scoring import compute_score_from_thresholds_weights
 from src.train import load_data
 
-FEATURE_NAMES = [
-    "PaFi", "GCS", "meanbp", "platelets", "creatinine", "bilirubin",
-    "norepinephrine", "epinephrine", "dopamine", "dobutamine"
-]
+with open("config.yaml", "r") as f:
+    config = yaml.safe_load(f)
+FEATURE_NAMES = config["feature_names"]
 
 def load_model(model_path):
     """Load trained model pipeline.

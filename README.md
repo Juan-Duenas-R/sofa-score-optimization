@@ -1,4 +1,4 @@
-# Data-Driven Recalibration of the SOFA Score Using Interpretable Machine Learning
+# Interpretable Recalibration of a SOFA-Derived Score Using Machine Learning-Guided Optimization: A Multicenter Cohort Study
 [![Python 3.8+](https://img.shields.io/badge/python-3.10-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -8,10 +8,9 @@ This repository contains the implementation of an optimized SOFA (Sequential Org
 ## Key Features
 
 - **Automatic bin selection** per feature using decision trees
-- **Integer weight optimization** for clinical interpretability
+- **Integer monotonic weight optimization** for clinical interpretability
 - **Scale-invariant optimization** with targeted score standard deviation
 - **Grid search** with cross-validation for hyperparameter tuning
-- **Positive coefficient enforcement** for monotonic risk relationships
 
 ## Repository Structure
 
@@ -20,6 +19,7 @@ This repository contains the implementation of an optimized SOFA (Sequential Org
 ├── README.md
 ├── requirements.txt
 ├── LICENSE
+├── config.yaml
 ├── docs
 │   └── index.html
 ├── data/
@@ -31,6 +31,7 @@ This repository contains the implementation of an optimized SOFA (Sequential Org
 │   └── utils/
 │       ├── binning.py
 │       ├── optimization.py
+│       ├── constraints.py
 │       └── scoring.py
 └── results/
 ```
@@ -87,7 +88,7 @@ from src.evaluate import evaluate_model
 # Load and evaluate
 metrics = evaluate_model(
     model_path='models/sofa_model.pkl',
-    test_data_path='data/synthetic_data.csv'
+    data_path='data/synthetic_data.csv'
 )
 ```
 
@@ -120,8 +121,6 @@ The optimization process consists of three stages:
 The final score is calibrated using logistic regression with:
 - Standardized score as input
 - L2 regularization
-- Class-balanced sample weights
-- Positive coefficient enforcement
 
 ## Configuration
 
@@ -130,6 +129,7 @@ Grid search parameters:
 - `min_samples_leaf`: [15]
 - `reg_lambda`: [0.01, 0.1, 1, 10, 100, 1000]
 - `W_bound`: [100]
+- `bin_penalty_alpha_list`: [0, 0.1, 1]
 
 ## Results
 
@@ -164,8 +164,9 @@ The calculator implements the following variables based on the data-driven thres
 - Bilirubin (Hepatic function)
 - Vasopressor support (Norepinephrine, Epinephrine, Dopamine, Dobutamine)
 
+New version includes the possibility to add respiratory support. In fact, this framework can be used with any set of variables.
 
-All thresholds and weights are implemented as specified in Table 2 of the manuscript.
+
 
 ### Disclaimer 
 This calculator is intended for research and educational purposes. Clinical decisions should be made by qualified healthcare professionals considering all available patient information. The calculator provides probability estimates based on the eICU-CRD dataset and may require local validation before clinical implementation.

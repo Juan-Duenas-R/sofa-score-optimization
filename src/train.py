@@ -11,12 +11,16 @@ import numpy as np
 import pandas as pd
 import yaml
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import log_loss, roc_auc_score
+from sklearn.metrics import average_precision_score, log_loss, roc_auc_score
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
 from src.utils.binning import auto_select_k_bins
-from src.utils.optimization import run_single_config
+from src.utils.optimization import (
+    run_single_config,
+    BIN_PENALTY_MODE,
+    MONOTONICITY_ENABLED,
+)
 from src.utils.scoring import (
     class_balance_weights,
     compute_score_from_thresholds_weights,
@@ -37,6 +41,9 @@ VAL_SIZE = config["val_size"]
 MIN_SAMPLES_LEAF_LIST = config["grid_search"]["min_samples_leaf_list"]
 W_BOUND_LIST = config["grid_search"]["w_bound_list"]
 REG_LAMBDA_LIST = config["grid_search"]["reg_lambda_list"]
+BIN_PENALTY_ALPHA_LIST = config["grid_search"].get(
+    "bin_penalty_alpha_list", None
+)
 
 AUTO_BIN_KMAX = config["auto_bin"]["kmax"]
 AUTO_BIN_MIN_SAMPLES_LEAF = config["auto_bin"]["min_samples_leaf"]
@@ -140,16 +147,29 @@ def perform_grid_search(
     Returns:
         pd.DataFrame: Results sorted by validation log-loss.
     """
-    grid = list(product(MIN_SAMPLES_LEAF_LIST, REG_LAMBDA_LIST, W_BOUND_LIST))
-    print(f"\nGrid search: {len(grid)} configurations")
+    # alpha is only a live hyperparameter under the corrected penalty; under
+    # "legacy" the term has zero gradient, so the grid collapses to one value.
+    if BIN_PENALTY_ALPHA_LIST and BIN_PENALTY_MODE == "shrinkage":
+        alpha_list = list(BIN_PENALTY_ALPHA_LIST)
+    else:
+        alpha_list = [BIN_PENALTY_ALPHA]
+
+    grid = list(product(
+        MIN_SAMPLES_LEAF_LIST, REG_LAMBDA_LIST, W_BOUND_LIST, alpha_list
+    ))
+    print(f"\nGrid search: {len(grid)} configurations "
+          f"(bin_penalty_mode={BIN_PENALTY_MODE}, "
+          f"alpha grid={alpha_list})")
 
     results = []
     t0 = time()
 
-    for idx, (min_samples_leaf, reg_lambda, W_bound) in enumerate(grid, 1):
+    for idx, (min_samples_leaf, reg_lambda, W_bound, bin_alpha) in \
+            enumerate(grid, 1):
         print(f"\n[{idx}/{len(grid)}] Config: k_bins={best_k_bins_list}, "
               f"min_samples_leaf={min_samples_leaf}, "
-              f"reg_lambda={reg_lambda}, W_bound={W_bound}")
+              f"reg_lambda={reg_lambda}, W_bound={W_bound}, "
+              f"bin_penalty_alpha={bin_alpha}")
 
         try:
             out = run_single_config(
@@ -163,7 +183,7 @@ def perform_grid_search(
                 y_val,
                 w_train,
                 MIN_METHOD,
-                bin_penalty_alpha=BIN_PENALTY_ALPHA,
+                bin_penalty_alpha=bin_alpha,
                 eps_counts=EPS_COUNTS
             )
 
@@ -172,6 +192,7 @@ def perform_grid_search(
                 "min_samples_leaf": min_samples_leaf,
                 "reg_lambda": reg_lambda,
                 "W_bound": W_bound,
+                "bin_penalty_alpha": bin_alpha,
                 "val_logloss": out["val_logloss"],
                 "val_auc": out["val_auc"],
                 "success": out["success"],
@@ -191,6 +212,7 @@ def perform_grid_search(
                 "min_samples_leaf": min_samples_leaf,
                 "reg_lambda": reg_lambda,
                 "W_bound": W_bound,
+                "bin_penalty_alpha": bin_alpha,
                 "val_logloss": 1e3,
                 "val_auc": 0.5,
                 "success": False,
@@ -245,7 +267,21 @@ def refit_final_model(
         _discrete_local_search,
         TARGET_SCORE_STD,
         SCALE_PENALTY_COEF,
-        EPS_STD
+        EPS_STD,
+        MONOTONICITY_ENABLED,
+        RECENTER_WEIGHTS,
+        BIN_PENALTY_MODE,
+        make_param_spec,
+    )
+    from src.utils.constraints import (
+        theta_to_weights,
+        weights_to_theta,
+        theta_bounds,
+        round_weights_monotone,
+        recenter_weights,
+        bin_counts_per_feature,
+        sparse_bin_penalty,
+        monotonicity_report,
     )
     from scipy.optimize import minimize
 
@@ -253,6 +289,7 @@ def refit_final_model(
     min_samples_leaf = best_config['min_samples_leaf']
     reg_lambda = best_config['reg_lambda']
     W_bound = best_config['W_bound']
+    bin_alpha = best_config.get('bin_penalty_alpha', BIN_PENALTY_ALPHA)
     n_features = X_comb.shape[1]
 
     # Get thresholds on combined data
@@ -308,20 +345,20 @@ def refit_final_model(
             X, thresholds_list_comb, wlist
         )
 
+    # Bin counts depend only on the data and the thresholds, never on the
+    # weights, so they are computed once instead of on every objective call.
+    counts_flat_comb = bin_counts_per_feature(
+        X_comb, thresholds_list_comb, k_bins_list
+    )
+    spec_layout_comb = make_param_spec(k_bins_list)
+
     # Objective function
-    def obj_weights_on_comb(wvec, bin_penalty_alpha=1.0, eps_counts=1e-6):
-        penalty_bins = 0.0
-        for j in range(n_features):
-            counts = np.bincount(
-                np.digitize(
-                    X_comb[:, j],
-                    thresholds_list_comb[j],
-                    right=False
-                ).astype(int),
-                minlength=k_bins_list[j]
-            )
-            penalty_bins += np.sum(1.0 / (counts + eps_counts))
-        penalty_bins *= bin_penalty_alpha
+    def obj_weights_on_comb(wvec, bin_penalty_alpha=bin_alpha,
+                            eps_counts=EPS_COUNTS):
+        penalty_bins = sparse_bin_penalty(
+            wvec, counts_flat_comb, bin_penalty_alpha, eps_counts,
+            mode=BIN_PENALTY_MODE, spec=spec_layout_comb
+        )
 
         s_comb = compute_score_from_wvec(X_comb, wvec).reshape(-1, 1)
         std_s = float(np.std(s_comb))
@@ -355,17 +392,35 @@ def refit_final_model(
         return float(loss + penalty_bins + penalty_scale)
 
     # Optimize continuous weights
-    bounds_comb = [(-W_bound, W_bound)] * len(w0_comb)
     print("\nOptimizing continuous weights...")
-    res_cont = minimize(
-        obj_weights_on_comb,
-        x0=w0_comb,
-        method=MIN_METHOD,
-        bounds=bounds_comb,
-        args=(1.0, 1e-6),
-        options={"maxiter": 1000, "ftol": 1e-6}
-    )
-    w_opt_cont = res_cont.x.copy()
+    if MONOTONICITY_ENABLED:
+        spec_comb = spec_layout_comb
+        print(spec_comb.summary())
+        theta0_comb = weights_to_theta(w0_comb, spec_comb, W_bound=W_bound)
+
+        def obj_theta_on_comb(theta):
+            return obj_weights_on_comb(theta_to_weights(theta, spec_comb))
+
+        res_cont = minimize(
+            obj_theta_on_comb,
+            x0=theta0_comb,
+            method=MIN_METHOD,
+            bounds=theta_bounds(spec_comb, W_bound),
+            options={"maxiter": 1000, "ftol": 1e-6}
+        )
+        w_opt_cont = theta_to_weights(res_cont.x, spec_comb)
+    else:
+        spec_comb = None
+        bounds_comb = [(-W_bound, W_bound)] * len(w0_comb)
+        res_cont = minimize(
+            obj_weights_on_comb,
+            x0=w0_comb,
+            method=MIN_METHOD,
+            bounds=bounds_comb,
+            args=(bin_alpha, EPS_COUNTS),
+            options={"maxiter": 1000, "ftol": 1e-6}
+        )
+        w_opt_cont = res_cont.x.copy()
 
     # Convert to integer weights with scale correction
     print("Converting to integer weights...")
@@ -373,7 +428,10 @@ def refit_final_model(
     std_cont = float(np.std(s_cont))
     scale = TARGET_SCORE_STD / max(std_cont, EPS_STD)
     w_scaled = w_opt_cont * scale
-    w_int0 = _clip_round_int(w_scaled, W_bound)
+    if MONOTONICITY_ENABLED:
+        w_int0 = round_weights_monotone(w_scaled, W_bound)
+    else:
+        w_int0 = _clip_round_int(w_scaled, W_bound)
 
     # Discrete local search
     print("Refining with discrete local search...")
@@ -383,7 +441,8 @@ def refit_final_model(
         W_bound=int(W_bound),
         max_passes=15,
         max_no_improve_passes=10,
-        step=1
+        step=1,
+        spec=spec_comb
     )
 
     w_opt_list_comb = vector_to_weights_list(w_opt_int)
@@ -409,7 +468,7 @@ def refit_final_model(
             C=C_reg_final,
             max_iter=1000
         )
-        lr.fit(score_comb_s, y_comb, sample_weight=w_comb)
+        lr.fit(score_comb_s, y_comb)
 
         y_prob = lr.predict_proba(score_test_s)[:, 1]
         auc = roc_auc_score(y_test, y_prob)
@@ -421,12 +480,32 @@ def refit_final_model(
     final_logreg, ss_final, y_test_prob, test_auc, test_logloss, coef = \
         fit_calibrator_and_eval(w_opt_list_comb)
 
-    # Enforce positive coefficient
+    # Enforce positive coefficient (behaviour unchanged)
     if coef < 0:
         print("\nCoefficient negative, inverting weights...")
+        if MONOTONICITY_ENABLED:
+            print("  WARNING: sign flip under monotonicity constraints "
+                  "reverses the imposed directions.")
         w_opt_list_comb = [(-w) for w in w_opt_list_comb]
         final_logreg, ss_final, y_test_prob, test_auc, test_logloss, coef = \
             fit_calibrator_and_eval(w_opt_list_comb)
+
+    # Presentational recentring + feasibility report
+    if MONOTONICITY_ENABLED and spec_comb is not None:
+        w_flat_final = np.concatenate(w_opt_list_comb)
+        if RECENTER_WEIGHTS:
+            w_flat_final = recenter_weights(w_flat_final, spec_comb)
+            w_opt_list_comb = vector_to_weights_list(w_flat_final)
+            # Recentring is a pure level shift; refit the calibrator so the
+            # stored intercept matches the published weights.
+            final_logreg, ss_final, y_test_prob, test_auc, test_logloss, \
+                coef = fit_calibrator_and_eval(w_opt_list_comb)
+        report, mono_ok = monotonicity_report(w_flat_final, spec_comb)
+        print("\n" + report)
+        if not mono_ok:
+            raise RuntimeError(
+                "Monotonicity constraints violated in the final model."
+            )
 
     print(f"\nFinal test metrics:")
     print(f"  AUC: {test_auc:.4f}")
@@ -443,6 +522,20 @@ def refit_final_model(
         "lr_coef": coef
     }
 
+
+def _eval_split(score, y, scaler, lr, label):
+    """Metrics for one split under a fixed score, scaler and calibrator."""
+    z = scaler.transform(np.asarray(score, float).reshape(-1, 1))
+    p = lr.predict_proba(z)[:, 1]
+    return {
+        "split": label,
+        "n": int(len(y)),
+        "event_rate": float(np.mean(y)),
+        "auroc": float(roc_auc_score(y, p)),
+        "auprc": float(average_precision_score(y, p)),
+        "logloss": float(log_loss(y, np.clip(p, 1e-12, 1 - 1e-12),
+                                  labels=[0, 1])),
+    }
 
 def train_sofa_model(data_path, output_dir="models/"):
     """Main training pipeline.
@@ -499,7 +592,10 @@ def train_sofa_model(data_path, output_dir="models/"):
         'k_bins': list(map(int, best_row["k_bins"])),
         'min_samples_leaf': int(best_row["min_samples_leaf"]),
         'reg_lambda': float(best_row["reg_lambda"]),
-        'W_bound': float(best_row["W_bound"])
+        'W_bound': float(best_row["W_bound"]),
+        'bin_penalty_alpha': float(
+            best_row.get("bin_penalty_alpha", BIN_PENALTY_ALPHA)
+        ),
     }
 
     final_model = refit_final_model(
@@ -519,6 +615,9 @@ def train_sofa_model(data_path, output_dir="models/"):
             "best_min_samples_leaf": best_config['min_samples_leaf'],
             "best_reg_lambda": best_config['reg_lambda'],
             "best_W_bound": best_config['W_bound'],
+            "best_bin_penalty_alpha": best_config['bin_penalty_alpha'],
+            "bin_penalty_mode": BIN_PENALTY_MODE,
+            "monotonicity_enabled": MONOTONICITY_ENABLED,
             "test_auc": final_model["test_auc"],
             "test_logloss": final_model["test_logloss"],
             "lr_coef": final_model["lr_coef"],
